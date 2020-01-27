@@ -1,0 +1,6 @@
+__MACOSX
+__pycache__
+.vscode
+data/
+*.tar
+*.zip
