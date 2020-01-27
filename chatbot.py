@@ -153,21 +153,15 @@ with open(datafile, "w", encoding="utf-8") as outputfile:
 """LOAD AND TRIM DATA"""
 
 """
-Our next order of business is to create a vocabulary
-and load query/response sentence pairs into memory.
+create a vocabulary and load query/response sentence pairs into memory.
 
-Note that we are dealing with sequences of words,
-which do not have an implicit mapping to a discrete numerical space.
-
-Thus, we must create one by mapping each unique word
-that we encounter in our dataset to an index value.
+Thus, we must create a mapping to a discrete numerical space 
+by mapping each unique word that we encounter in our dataset 
+to an index value.
 
 For this we define a Voc class, which keeps a mapping
 from words to indexes, a reverse mapping of indexes to words,
-a count of each word and a total word count. The class provides
-methods for adding a word to the vocabulary (addWord), adding all
-words in a sentence (addSentence) and trimming infrequently seen
-words (trim). More on trimming later.
+a count of each word and a total word count.
 """
 
 # Default word tokens
@@ -220,18 +214,6 @@ class Voc:
 
 
 """PREPROCESS"""
-
-"""
-Now we can assemble our vocabulary and query/response sentence pairs.
-Before we are ready to use this data, we must perform some preprocessing.
-
-First, we must convert the Unicode strings to ASCII using unicodeToAscii.
-Next, we should convert all letters to lowercase and trim all non-letter
-characters except for basic punctuation (normalizeString).
-
-Finally, to aid in training convergence, we will filter out sentences
-with length greater than the MAX_LENGTH threshold (filterPairs).
-"""
 
 MAX_LENGTH = 10  # Maximum sentence length to consider
 
@@ -301,14 +283,12 @@ voc, pairs = loadPrepareData(corpus, corpus_name, datafile, save_dir)
 #     print(pair)
 
 """
-Another tactic that is beneficial to achieving faster convergence
-during training is trimming rarely used words out of our vocabulary.
+Achieving faster convergence during training 
+by trimming rarely used words:
 Decreasing the feature space will also soften the difficulty of the
-function that the model must learn to approximate. We will do this
-as a two-step process:
+function that the model must learn to approximate.
 
-1. Trim words used under MIN_COUNT threshold using
-the voc.trim function.
+1. Trim words used under MIN_COUNT threshold
 2. Filter out pairs with trimmed words.
 """
 
@@ -352,35 +332,14 @@ pairs = trimRareWords(voc, pairs, MIN_COUNT)
 '''PREPARE DATA FOR MODELS'''
 
 '''
-Although we have put a great deal of effort into preparing 
-and massaging our data into a nice vocabulary object and 
-list of sentence pairs, our models will ultimately expect 
-numerical torch tensors as inputs. 
+To deal with different-length sentences in the same mini-batch,
+the batched input tensor will be of shape
+(max_length, batch_size), where sentences shorter than
+max_length are zero padded after an EOS_token.
 
-One way to prepare the processed data for the models can 
-be found in the seq2seq translation tutorial. In that tutorial, 
-we use a batch size of 1, meaning that all we have to do is convert 
-the words in our sentence pairs to their corresponding indexes from 
-the vocabulary and feed this to the models.
-
-However, if you’re interested in speeding up training and/or would 
-like to leverage GPU parallelization capabilities, you will need 
-to train with mini-batches.
-
-Using mini-batches also means that we must be mindful of the variation 
-of sentence length in our batches. To accomodate sentences of different 
-sizes in the same batch, we will make our batched input tensor of shape 
-(max_length, batch_size), where sentences shorter than the max_length are 
-zero padded after an EOS_token.
-
-If we simply convert our English sentences to tensors by converting words 
-to their indexes(indexesFromSentence) and zero-pad, our tensor would have 
-shape (batch_size, max_length) and indexing the first dimension would return 
-a full sequence across all time-steps. However, we need to be able to index 
-our batch along time, and across all sequences in the batch. Therefore, we 
-transpose our input batch shape to (max_length, batch_size), so that indexing 
-across the first dimension returns a time step across all sentences in the batch. 
-We handle this transpose implicitly in the zeroPadding function.
+transpose input batch shape to (max_length, batch_size), so indexing
+across the first dimension returns a time step across all sentences
+in the batch.
 '''
 
 
@@ -419,7 +378,8 @@ def inputVar(l, voc):
     '''
     Converts sentences to tensor.
     Gets word indexes and lengths for each sentence and zero pads
-    Returns torch tensor of input sequences
+    Returns torch tensor of input sequences,
+    transposed, to access time steps for all sentences.
     and their lengths for use later in the decoder
     '''
     indexes_batch = [indexesFromSentence(voc, sentence) for sentence in l]
@@ -481,67 +441,6 @@ print("max_target_len:", max_target_len)
 
 '''Seq2Seq Model'''
 
-'''
-The brains of our chatbot is a sequence-to-sequence (seq2seq) model.
-The goal of a seq2seq model is to take a variable-length sequence
-as an input, and return a variable-length sequence as an output
-using a fixed-sized model.
-
-Sutskever et al. discovered that by using two separate recurrent
-neural nets together, we can accomplish this task. One RNN acts
-as an encoder, which encodes a variable length input sequence to
-a fixed-length context vector. In theory, this context vector
-(the final hidden layer of the RNN) will contain semantic information
-about the query sentence that is input to the bot. The second RNN is
-a decoder, which takes an input word and the context vector, and returns
-a guess for the next word in the sequence and a hidden state to use in
-the next iteration.
-'''
-
-
-'''ENCODER'''
-
-'''
-The encoder RNN iterates through the input sentence one token
-(e.g. word) at a time, at each time step outputting an “output”
-vector and a “hidden state” vector. The hidden state vector is then
-passed to the next time step, while the output vector is recorded.
-
-The encoder transforms the context it saw at each point in the sequence
-into a set of points in a high-dimensional space, which the decoder will
-use to generate a meaningful output for the given task.
-
-At the heart of our encoder is a multi-layered Gated Recurrent Unit,
-invented by Cho et al. in 2014. We will use a bidirectional variant of the GRU,
-meaning that there are essentially two independent RNNs: one that is fed the input
-sequence in normal sequential order, and one that is fed the input sequence in reverse order.
-The outputs of each network are summed at each time step. Using a bidirectional GRU will give
-us the advantage of encoding both past and future context.
-'''
-
-'''
-Computation Graph:
-
-1. Convert word indexes to embeddings.
-2. Pack padded batch of sequences for RNN module.
-3. Forward pass through GRU.
-4. Unpack padding.
-5. Sum bidirectional GRU outputs.
-6. Return output and final hidden state.
-
-Inputs:
-
-- input_seq: batch of input sentences; shape=(max_length, batch_size)
-- input_lengths: list of sentence lengths corresponding to each sentence in the batch; shape=(batch_size)
-- hidden: hidden state; shape=(n_layers x num_directions, batch_size, hidden_size)
-
-Outputs:
-
-- outputs: output features from the last hidden layer of the GRU 
-   (sum of bidirectional outputs); shape=(max_length, batch_size, hidden_size)
-- hidden: updated hidden state from GRU; shape=(n_layers x num_directions, batch_size, hidden_size)
-'''
-
 
 class EncoderRNN(nn.Module):
     def __init__(self, hidden_size, embedding, n_layers=1, dropout=0):
@@ -569,26 +468,10 @@ class EncoderRNN(nn.Module):
         # Return output and final hidden state
         return outputs, hidden
     
+
 '''DECODER'''
 
-'''
-The decoder RNN generates the response sentence in a token-by-token fashion. 
-It uses the encoder’s context vectors, and internal hidden states to generate the next word in the sequence. 
-It continues generating words until it outputs an EOS_token, representing the end of the sentence.
 
-A common problem with a vanilla seq2seq decoder is that if we rely soley on the context vector
-to encode the entire input sequence’s meaning, it is likely that we will have information loss. 
-This is especially the case when dealing with long input sequences, greatly limiting the capability of our decoder.
-
-To combat this, Bahdanau et al. created an “attention mechanism” that 
-allows the decoder to pay attention to certain parts of the input sequence, 
-rather than using the entire fixed context at every step.
-
-At a high level, attention is calculated using the decoder’s current hidden state 
-and the encoder’s outputs. The output attention weights have the same shape as the 
-input sequence, allowing us to multiply them by the encoder outputs, giving us a 
-weighted sum which indicates the parts of encoder output to pay attention to.
- '''
 # Luong attention layer
 class Attn(nn.Module):
     def __init__(self, method, hidden_size):
@@ -629,30 +512,8 @@ class Attn(nn.Module):
         # Return the softmax normalized probability scores (with added dimension)
         return F.softmax(attn_energies, dim=1).unsqueeze(1)
 
-'''
-Computation Graph:
 
-1. Get embedding of current input word.
-2. Forward through unidirectional GRU.
-3.Calculate attention weights from the current GRU output from (2).
-4. Multiply attention weights to encoder outputs to get new “weighted sum” context vector.
-5. Concatenate weighted context vector and GRU output using Luong eq. 5.
-6. Predict next word using Luong eq. 6 (without softmax).
-7. Return output and final hidden state.
-
-Inputs:
-
-input_step: one time step (one word) of input sequence batch; shape=(1, batch_size)
-last_hidden: final hidden layer of GRU; shape=(n_layers x num_directions, batch_size, hidden_size)
-encoder_outputs: encoder model’s output; shape=(max_length, batch_size, hidden_size)
-
-Outputs:
-
-output: softmax normalized tensor giving probabilities of each word being the correct
-next word in the decoded sequence; shape=(batch_size, voc.num_words)
-
-hidden: final hidden state of GRU; shape=(n_layers x num_directions, batch_size, hidden_size)
-'''
+'''DECODER'''
 
 
 class LuongAttnDecoderRNN(nn.Module):
@@ -697,14 +558,12 @@ class LuongAttnDecoderRNN(nn.Module):
         # Return output and final hidden state
         return output, hidden
 
+
 def maskNLLLoss(inp, target, mask):
     '''
-    Since we are dealing with batches of padded sequences,
-    we cannot consider all the elements of the tensor when
-    calculating loss.
-    This loss function calculates the average negative log likelihood
-    of only the elements that correspond to a 1 in the mask tensor,
-    i.e., skipping the padding elements.
+    The loss function calculates the average negative log likelihood
+    of only the elements that correspond to 1 in the mask tensor,
+    i.e., we don't calculate the gradient of the padding.
     '''
     nTotal = mask.sum()
     crossEntropy = -torch.log(torch.gather(inp, 1, target.view(-1, 1)).squeeze(1))
@@ -713,18 +572,7 @@ def maskNLLLoss(inp, target, mask):
     return loss, nTotal.item()
 
 
-'''
-Sequence of Operations:
-
-Forward pass entire input batch through encoder.
-Initialize decoder inputs as SOS_token, and hidden state as the encoder’s final hidden state.
-Forward input batch sequence through decoder one time step at a time.
-If teacher forcing: set next decoder input as the current target; else: set next decoder input as current decoder output.
-Calculate and accumulate loss.
-Perform backpropagation.
-Clip gradients.
-Update encoder and decoder model parameters.
-'''
+'''TRAIN'''
 
 
 def train(input_variable, lengths, target_variable, mask, max_target_len, encoder, decoder, embedding,
@@ -804,9 +652,9 @@ def trainIters(model_name, voc, pairs, encoder, decoder, encoder_optimizer, deco
     '''
     Run n_iterations of training given the passed parameters.
     Save a tarball containing the encoder and decoder state_dicts (parameters),
-      the optimizers’ state_dicts, the loss, the iteration, and other data.
-      After loading a checkpoint, we will be able to use the model parameters
-      to run inference, or we can continue training right where we left off.
+      the optimizers’ state_dicts, the loss, the iteration, and other model data.
+      After loading a checkpoint, use model parameters
+      to run inference, or resume training.
     '''
     # Load batches for each iteration
     training_batches = [batch2TrainData(voc, [random.choice(pairs) for _ in range(batch_size)])
@@ -853,22 +701,9 @@ def trainIters(model_name, voc, pairs, encoder, decoder, encoder_optimizer, deco
                 'embedding': embedding.state_dict()
             }, os.path.join(directory, '{}_{}.tar'.format(iteration, 'checkpoint')))
 
+
 '''GREEDY DECODING'''
 
-'''
-Computation Graph:
-
-Forward input through encoder model.
-Prepare encoder’s final hidden layer to be first hidden input to the decoder.
-Initialize decoder’s first input as SOS_token.
-Initialize tensors to append decoded words to.
-Iteratively decode one word token at a time:
-  Forward pass through decoder.
-  Obtain most likely word token and its softmax score.
-  Record token and score.
-  Prepare current token to be next decoder input.
-Return collections of word tokens and scores.
-'''
 
 class GreedySearchDecoder(nn.Module):
     def __init__(self, encoder, decoder):
@@ -899,6 +734,7 @@ class GreedySearchDecoder(nn.Module):
             decoder_input = torch.unsqueeze(decoder_input, 0)
         # Return collections of word tokens and scores
         return all_tokens, all_scores
+
 
 def evaluate(encoder, decoder, searcher, voc, sentence, max_length=MAX_LENGTH):
     ### Format input sentence as a batch
@@ -937,103 +773,105 @@ def evaluateInput(encoder, decoder, searcher, voc):
         except KeyError:
             print("Error: Encountered unknown word.")
 
-'''Configure models'''
 
-# Configure models
-model_name = 'cb_model_v01'
-attn_model = 'dot'
-#attn_model = 'general'
-#attn_model = 'concat'
-hidden_size = 500
-encoder_n_layers = 2
-decoder_n_layers = 2
-dropout = 0.1
-batch_size = 64
-
-# Set checkpoint to load from; set to None if starting from scratch
-loadFilename = None
-checkpoint_iter = 4000
-#loadFilename = os.path.join(save_dir, model_name, corpus_name,
-#                            '{}-{}_{}'.format(encoder_n_layers, decoder_n_layers, hidden_size),
-#                            '{}_checkpoint.tar'.format(checkpoint_iter))
-
-
-# Load model if a loadFilename is provided
-if loadFilename:
-    # If loading on same machine the model was trained on
-    checkpoint = torch.load(loadFilename)
-    # If loading a model trained on GPU to CPU
-    #checkpoint = torch.load(loadFilename, map_location=torch.device('cpu'))
-    encoder_sd = checkpoint['en']
-    decoder_sd = checkpoint['de']
-    encoder_optimizer_sd = checkpoint['en_opt']
-    decoder_optimizer_sd = checkpoint['de_opt']
-    embedding_sd = checkpoint['embedding']
-    voc.__dict__ = checkpoint['voc_dict']
-
-
-print('Building encoder and decoder ...')
-# Initialize word embeddings
-embedding = nn.Embedding(voc.num_words, hidden_size)
-if loadFilename:
-    embedding.load_state_dict(embedding_sd)
-# Initialize encoder & decoder models
-encoder = EncoderRNN(hidden_size, embedding, encoder_n_layers, dropout)
-decoder = LuongAttnDecoderRNN(attn_model, embedding, hidden_size, voc.num_words, decoder_n_layers, dropout)
-if loadFilename:
-    encoder.load_state_dict(encoder_sd)
-    decoder.load_state_dict(decoder_sd)
-# Use appropriate device
-encoder = encoder.to(device)
-decoder = decoder.to(device)
-print('Models built and ready to go!')
-
-'''RUN MODEL'''
-
-# Configure training/optimization
-clip = 50.0
-teacher_forcing_ratio = 1.0
-learning_rate = 0.0001
-decoder_learning_ratio = 5.0
-n_iteration = 4000
-print_every = 1
-save_every = 500
-
-# Ensure dropout layers are in train mode
-encoder.train()
-decoder.train()
-
-# Initialize optimizers
-print('Building optimizers ...')
-encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
-decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate * decoder_learning_ratio)
-if loadFilename:
-    encoder_optimizer.load_state_dict(encoder_optimizer_sd)
-    decoder_optimizer.load_state_dict(decoder_optimizer_sd)
-
-# If you have cuda, configure cuda to call
-for state in encoder_optimizer.state.values():
-    for k, v in state.items():
-        if isinstance(v, torch.Tensor):
-            state[k] = v.cuda()
-
-for state in decoder_optimizer.state.values():
-    for k, v in state.items():
-        if isinstance(v, torch.Tensor):
-            state[k] = v.cuda()
-
-# Run training iterations
-print("Starting Training!")
-trainIters(model_name, voc, pairs, encoder, decoder, encoder_optimizer, decoder_optimizer,
-           embedding, encoder_n_layers, decoder_n_layers, save_dir, n_iteration, batch_size,
-           print_every, save_every, clip, corpus_name, loadFilename)
-
-# Set dropout layers to eval mode
-encoder.eval()
-decoder.eval()
-
-# Initialize search module
-searcher = GreedySearchDecoder(encoder, decoder)
-
-# Begin chatting (uncomment and run the following line to begin)
-evaluateInput(encoder, decoder, searcher, voc)
+if __name__ == "__main__":
+    '''Configure models'''
+    
+    # Configure models
+    model_name = 'cb_model_v02' # input("Enter model name: ")
+    attn_model = 'concat' # input("Enter attention model, default is 'dot'. (Alternatives: 'general', 'concat')")
+    # attn_model = 'general'
+    # attn_model = 'concat'
+    hidden_size = 500
+    encoder_n_layers = 2
+    decoder_n_layers = 2
+    dropout = 0.1
+    batch_size = 64
+    
+    # Set checkpoint to load from; set to None if starting from scratch
+    loadFilename = None
+    checkpoint_iter = 4000
+    #loadFilename = os.path.join(save_dir, model_name, corpus_name,
+    #                            '{}-{}_{}'.format(encoder_n_layers, decoder_n_layers, hidden_size),
+    #                            '{}_checkpoint.tar'.format(checkpoint_iter))
+    
+    
+    # Load model if a loadFilename is provided
+    if loadFilename:
+        # If loading on same machine the model was trained on
+        checkpoint = torch.load(loadFilename)
+        # If loading a model trained on GPU to CPU
+        #checkpoint = torch.load(loadFilename, map_location=torch.device('cpu'))
+        encoder_sd = checkpoint['en']
+        decoder_sd = checkpoint['de']
+        encoder_optimizer_sd = checkpoint['en_opt']
+        decoder_optimizer_sd = checkpoint['de_opt']
+        embedding_sd = checkpoint['embedding']
+        voc.__dict__ = checkpoint['voc_dict']
+    
+    
+    print('Building encoder and decoder ...')
+    # Initialize word embeddings
+    embedding = nn.Embedding(voc.num_words, hidden_size)
+    if loadFilename:
+        embedding.load_state_dict(embedding_sd)
+    # Initialize encoder & decoder models
+    encoder = EncoderRNN(hidden_size, embedding, encoder_n_layers, dropout)
+    decoder = LuongAttnDecoderRNN(attn_model, embedding, hidden_size, voc.num_words, decoder_n_layers, dropout)
+    if loadFilename:
+        encoder.load_state_dict(encoder_sd)
+        decoder.load_state_dict(decoder_sd)
+    # Use appropriate device
+    encoder = encoder.to(device)
+    decoder = decoder.to(device)
+    print('Models built and ready to go!')
+    
+    '''RUN MODEL'''
+    
+    # Configure training/optimization
+    clip = 50.0
+    teacher_forcing_ratio = 1.0
+    learning_rate = 0.0001
+    decoder_learning_ratio = 5.0
+    n_iteration = 4000
+    print_every = 1
+    save_every = 500
+    
+    # Ensure dropout layers are in train mode
+    encoder.train()
+    decoder.train()
+    
+    # Initialize optimizers
+    print('Building optimizers ...')
+    encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
+    decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate * decoder_learning_ratio)
+    if loadFilename:
+        encoder_optimizer.load_state_dict(encoder_optimizer_sd)
+        decoder_optimizer.load_state_dict(decoder_optimizer_sd)
+    
+    # If you have cuda, configure cuda to call
+    for state in encoder_optimizer.state.values():
+        for k, v in state.items():
+            if isinstance(v, torch.Tensor):
+                state[k] = v.cuda()
+    
+    for state in decoder_optimizer.state.values():
+        for k, v in state.items():
+            if isinstance(v, torch.Tensor):
+                state[k] = v.cuda()
+    
+    # Run training iterations
+    print("Starting Training!")
+    trainIters(model_name, voc, pairs, encoder, decoder, encoder_optimizer, decoder_optimizer,
+               embedding, encoder_n_layers, decoder_n_layers, save_dir, n_iteration, batch_size,
+               print_every, save_every, clip, corpus_name, loadFilename)
+    
+    # Set dropout layers to eval mode
+    encoder.eval()
+    decoder.eval()
+    
+    # Initialize search module
+    searcher = GreedySearchDecoder(encoder, decoder)
+    
+    # Begin chatting (uncomment and run the following line to begin)
+    evaluateInput(encoder, decoder, searcher, voc)
