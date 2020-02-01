@@ -8,6 +8,7 @@ from torch.jit import script, trace
 import torch.nn as nn
 from torch import optim
 import torch.nn.functional as F
+from transformers import BertModel, BertTokenizer
 import csv
 import random
 import re
@@ -18,6 +19,16 @@ from io import open
 import itertools
 import math
 
+
+# BERT = BertModel, BertTokenizer, 'bert-base-uncased'
+#BERT_MODEL_CLASSES = [BertModel, BertForPreTraining, BertForMaskedLM, BertForNextSentencePrediction,
+#                      BertForSequenceClassification, BertForTokenClassification, BertForQuestionAnswering]
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+model = BertModel.from_pretrained('bert-base-uncased')
+
+input_ids = torch.tensor([tokenizer.encode("", add_special_tokens=True)])
+with torch.no_grad():
+    last_hidden_states = model(input_ids)[0] # Models outputs are now tuples
 
 USE_CUDA = torch.cuda.is_available()
 device = torch.device("cuda" if USE_CUDA else "cpu")
